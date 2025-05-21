@@ -8,7 +8,7 @@ set -euo pipefail
 k3d cluster create --k3s-arg "--kube-controller-manager-arg=horizontal-pod-autoscaler-sync-period=1s@server:*"
 helm repo add kedifykeda https://kedify.github.io/charts
 
-helm upgrade --install keda kedifykeda/keda --namespace keda --create-namespace --version v2.16.1-3 --values <(cat << EOF
+helm upgrade --install keda kedifykeda/keda --namespace keda --create-namespace --version v2.17.1-0 --values <(cat << EOF
 watchNamespace: ''
 image:
   pullPolicy: IfNotPresent
@@ -17,7 +17,7 @@ env:
     value: "true"
 EOF
 )
-helm upgrade --install keda-add-ons-http kedifykeda/keda-add-ons-http --namespace keda --version v0.10.0-5 --values <(cat << EOF
+helm upgrade --install keda-add-ons-http kedifykeda/keda-add-ons-http --namespace keda --version v0.10.0-7 --values <(cat << EOF
 scaler:
   pullPolicy: IfNotPresent
 interceptor:
@@ -25,12 +25,12 @@ interceptor:
   replicas:
     min: 1
     max: 1
-  additionalEnvVars:
-    - name: COLD_START_FORWARDING_DELAY_MS
-      value: "1000"
 EOF
 )
-helm upgrade --install kedify-agent kedifykeda/kedify-agent --namespace keda --create-namespace --version v0.2.5 --values <(cat << EOF
+kubectl --namespace=keda set env deployment/keda-add-ons-http-interceptor KEDIFY_EXCLUDE_INTERCEPTOR_METRICS=true
+kubectl --namespace=keda set image deployment/keda-add-ons-http-interceptor keda-add-ons-http-interceptor=wozniakjan/http-add-on-interceptor:kcd-2025
+
+helm upgrade --install kedify-agent kedifykeda/kedify-agent --namespace keda --create-namespace --version v0.2.7 --values <(cat << EOF
 clusterName: kcd-2025
 agent:
   orgId: "00000000-0000-0000-0000-000000000000"
@@ -86,7 +86,7 @@ metadata:
   namespace: default
 spec:
   rules:
-  - host: app.com
+  - host: demo.keda
     http:
       paths:
       - backend:
@@ -115,13 +115,13 @@ spec:
     name: app
   triggers:
   - metadata:
-      hosts: app.com
+      hosts: demo.keda
       pathPrefixes: /
       port: "8080"
       scalingMetric: requestRate
       service: app
       targetValue: "10"
-      window: "30s"
+      window: "10s"
     metricType: AverageValue
     type: kedify-http
 EOF
@@ -136,3 +136,7 @@ k3d image import ghcr.io/kedify/sample-http-server:latest
 kubectl wait -ndefault --for=jsonpath='{.status.loadBalancer.ingress}' ingress/app --timeout=5m
 while ! kubectl wait -ndefault --timeout=5m --for=condition=Available deployment/kedify-proxy; do sleep 5; done
 kubectl wait -ndefault --timeout=5m --for=jsonpath='{.spec.rules[0].http.paths[0].backend.service.name}="kedify-proxy"' ingress/app
+
+sudo sed -i.bak "/demo.keda/d" /etc/hosts
+IP=$(kubectl get ingress app -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+echo "${IP} demo.keda" | sudo tee -a /etc/hosts
